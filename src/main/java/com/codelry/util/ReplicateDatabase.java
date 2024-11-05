@@ -3,11 +3,9 @@ package com.codelry.util;
 import com.couchbase.lite.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import reactor.core.publisher.Flux;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.time.Duration;
 import java.util.List;
 
 public class ReplicateDatabase {
@@ -20,6 +18,9 @@ public class ReplicateDatabase {
   private static ListenerToken docToken;
   private static boolean selfSignedCertificate = true;
   private static int retryCount = 10;
+  private static long completed = 0;
+  private static long total = 0;
+  private static final Object coordinator = new Object();
 
   private ReplicateDatabase() {}
 
@@ -34,21 +35,24 @@ public class ReplicateDatabase {
     return instance;
   }
 
-  public static void init(String url, String username, String password, List<Collection> collections, List<String> channels, boolean selfSigned) throws URISyntaxException {
-    CollectionConfiguration config = new CollectionConfiguration()
-        .setChannels(channels);
+  public static void init(String url, String username, String password, List<Collection> collections,
+                          List<String> channels, boolean selfSigned, boolean continuous) throws URISyntaxException {
+    CollectionConfiguration config = new CollectionConfiguration();
+
+    if (!channels.isEmpty()) {
+      config.setChannels(channels);
+    }
 
     ReplicatorConfiguration replicatorConfig = new ReplicatorConfiguration(new URLEndpoint(new URI(url)))
         .addCollections(collections, config)
         .setType(ReplicatorType.PULL)
-        .setContinuous(false)
+        .setContinuous(continuous)
         .setAutoPurgeEnabled(false)
         .setAuthenticator(new BasicAuthenticator(username, password.toCharArray()));
     if (selfSigned) {
       replicatorConfig.setAcceptOnlySelfSignedServerCertificate(true);
     }
     replicator = new Replicator(replicatorConfig);
-
 
     listenerToken = replicator.addChangeListener(change -> {
       CouchbaseLiteException err = change.getStatus().getError();
@@ -68,6 +72,9 @@ public class ReplicateDatabase {
         case STOPPED:
           replicationStatus = ReplicationStatus.STOPPED;
           LOGGER.info("Replication Status STOPPED");
+          synchronized (coordinator) {
+            coordinator.notify();
+          }
           break;
         case BUSY:
           replicationStatus = ReplicationStatus.BUSY;
@@ -79,12 +86,8 @@ public class ReplicateDatabase {
           break;
       }
 
-      if (change.getStatus().getProgress().getCompleted() == change.getStatus().getProgress().getTotal() || change.getStatus().getProgress().getCompleted() == 0) {
-        replicationProgress = "Completed";
-        LOGGER.info("Replication Status COMPLETED");
-      } else {
-        replicationProgress = String.format("%s / %s", change.getStatus().getProgress().getTotal(), change.getStatus().getProgress().getCompleted());
-      }
+      completed = change.getStatus().getProgress().getCompleted();
+      total = change.getStatus().getProgress().getTotal();
     });
 
     docToken = replicator.addDocumentReplicationListener(replication -> {
@@ -103,19 +106,17 @@ public class ReplicateDatabase {
   }
 
   public static void stop() {
-    replicator.stop();
+    if (replicationStatus != ReplicationStatus.STOPPED) {
+      replicator.stop();
+    }
+    listenerToken.remove();
+    docToken.remove();
+    replicator.close();
   }
 
-  public static void replicationWait() {
-    LOGGER.info("Waiting for replication to complete");
-    for (int i = 0; i < retryCount * 10; i++) {
-      boolean completed = Boolean.TRUE.equals(Flux.just(replicationProgress)
-          .flatMap(r -> Flux.just(r.equals("Completed")))
-          .delayElements(Duration.ofMillis(100L))
-          .blockLast());
-      if (completed) {
-        break;
-      }
+  public static void replicationWait() throws InterruptedException {
+    synchronized (coordinator) {
+      coordinator.wait();
     }
   }
 

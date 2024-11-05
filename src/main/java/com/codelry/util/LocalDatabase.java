@@ -27,11 +27,22 @@ public class LocalDatabase {
 
   public static void init(String dbPath, String scopeName, String collectionName) throws CouchbaseLiteException {
     CouchbaseLite.init();
+    Database.log.getConsole().setLevel(LogLevel.ERROR);
     DatabaseConfiguration config = new DatabaseConfiguration();
     config.setDirectory(dbPath);
 
     database = new Database(collectionName, config);
     collection = database.createCollection(collectionName, scopeName);
+  }
+
+  public static void close() {
+    if (database != null) {
+      try {
+        database.close();
+      } catch (CouchbaseLiteException e) {
+        LOGGER.error(e);
+      }
+    }
   }
 
   public static Collection getCollection() {

@@ -19,7 +19,7 @@ public class ReplicatorCLI {
     String directory;
     String scope;
     String collection;
-    String channel;
+    List<String> channels;
 
     Option urlOpt = new Option("U", "url", true, "Gateway URL");
     Option usernameOpt = new Option("u", "username", true, "Username");
@@ -34,7 +34,7 @@ public class ReplicatorCLI {
     directoryOpt.setRequired(true);
     scopeOpt.setRequired(true);
     collectionOpt.setRequired(true);
-    channelOpt.setRequired(true);
+    channelOpt.setRequired(false);
     options.addOption(urlOpt);
     options.addOption(usernameOpt);
     options.addOption(passwordOpt);
@@ -60,13 +60,21 @@ public class ReplicatorCLI {
     directory = cmd.getOptionValue("directory");
     scope = cmd.getOptionValue("scope");
     collection = cmd.getOptionValue("collection");
-    channel = cmd.getOptionValue("channel");
+    if (cmd.hasOption("channel")) {
+      channels = List.of(cmd.getOptionValue("channel"));
+    } else {
+      channels = new java.util.ArrayList<>();
+    }
 
     try {
       LocalDatabase.init(directory, scope, collection);
       Collection liteCollection = LocalDatabase.getCollection();
-      ReplicateDatabase.init(url, username, password, List.of(liteCollection), List.of(channel), false);
+      ReplicateDatabase.init(url, username, password, List.of(liteCollection), channels, false, false);
       ReplicateDatabase.start();
+      ReplicateDatabase.replicationWait();
+      ReplicateDatabase.stop();
+      LocalDatabase.close();
+      System.exit(0);
     } catch (Exception e) {
       System.err.println("Error: " + e);
       e.printStackTrace(System.err);
